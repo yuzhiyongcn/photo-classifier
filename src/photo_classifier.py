@@ -216,7 +216,7 @@ class Classifier():
         return new_name
 
 
-cf = Classifier('D:/temp/相册',
+cf = Classifier(input_folder='D:/temp/相册',
                 photo_output='D:/总仓库-照片视频/总照片备份',
                 video_output='D:/总仓库-照片视频/总视频备份',
                 image_output='D:/总仓库-照片视频/总图片备份')
