@@ -19,8 +19,8 @@ from win32com.propsys import propsys, pscon
 
 class Classifier():
     mode = 'prod'  # 开发模式(dev)还是产品模式(prod)
-    IMAGE_EXTENTIONS = ['jpg', 'jpeg', 'bmp', 'png']
-    VIDEO_EXTENTIONS = ['mp4']
+    IMAGE_EXTENTIONS = ['jpg', 'jpeg', 'bmp', 'png', 'tif', 'gif']
+    VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'exe', 'mov', 'ppt', 'amr', 'mpg']
     TEST_TABLE = 'TEST_PHOTO'
     TABLE = 'PHOTO'
     PHOTO_NO_DATE_KEYS = ['EXIF ExifVersion']
@@ -144,7 +144,7 @@ class Classifier():
             record = cursor.fetchone()
             if str(record) != 'None':
                 os.remove(file_path)
-                raise Exception('重复照片 {} --> 删除'.format(file_path))
+                raise Exception('重复文件 {} --> 删除'.format(file_path))
         except Exception as e:
             raise e
 
