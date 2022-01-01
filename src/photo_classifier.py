@@ -20,7 +20,7 @@ from win32com.propsys import propsys, pscon
 class Classifier():
     mode = 'prod'  # 开发模式(dev)还是产品模式(prod)
     IMAGE_EXTENTIONS = ['jpg', 'jpeg', 'bmp', 'png', 'tif', 'gif']
-    VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'exe', 'mov', 'ppt', 'amr', 'mpg']
+    VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'mov', 'ppt', 'amr', 'mpg']
     TEST_TABLE = 'TEST_PHOTO'
     TABLE = 'PHOTO'
     PHOTO_NO_DATE_KEYS = ['EXIF ExifVersion']
