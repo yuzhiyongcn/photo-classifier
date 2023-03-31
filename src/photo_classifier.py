@@ -6,6 +6,7 @@
 '''
 
 import os
+import sys
 from posixpath import abspath
 import exifread
 import time
@@ -37,7 +38,7 @@ class Classifier():
         pass
 
     def connect_database(self):
-        self.db = pymysql.connect(host='bt.biggerfish.tech', user='admin', password='zhiyong214', database='photo_classifier')
+        self.db = pymysql.connect(host='138.2.66.248', user='admin', password='zhiyong214', database='photo_classifier')
 
     def close_database(self):
         self.db.close()
@@ -116,8 +117,8 @@ class Classifier():
         md5 = self.get_md5(file_path)
         try:
             self.validate(file_path, md5)
-            year, month = self.read_date(file_path)
-            new_name = self.rename_move(file_path, year, month)
+            year, month, day = self.read_date(file_path)
+            new_name = self.rename_move(file_path, year, month, day)
             self.add_record(md5)
             self.processed_count += 1
             print('已处理 {}: {} --> {}'.format(self.processed_count, file, new_name))
@@ -159,10 +160,11 @@ class Classifier():
                 key = keys[0]
                 origin_date = tags[key]
                 time_str = str(origin_date)
-                _date = time_str[:7].split(':')
+                _date = time_str[:10].split(':')
                 year = _date[0]
                 month = _date[1]
-                return (year, month)
+                day = _date[2]
+                return (year, month, day)
         return None
 
     def get_video_create_date(self, file):
@@ -170,10 +172,11 @@ class Classifier():
             properties = propsys.SHGetPropertyStoreFromParsingName(file)
             dt = properties.GetValue(pscon.PKEY_Media_DateEncoded).GetValue()
             time_str = str(dt.astimezone(pytz.timezone('Asia/Shanghai')))
-            _date = time_str[:7].split('-')
+            _date = time_str[:10].split('-')
             year = _date[0]
             month = _date[1]
-            return (year, month)
+            day = _date[2]
+            return (year, month, day)
         except:
             return None
 
@@ -188,13 +191,14 @@ class Classifier():
         if not date:  # 获取文件上次修改日期
             time_str = os.path.getmtime(file)
             time_str = str(datetime.datetime.fromtimestamp(time_str))
-            _date = time_str[:7].split('-')
+            _date = time_str[:10].split('-')
             year = _date[0]
             month = _date[1]
-            date = (year, month)
+            day = _date[2]
+            date = (year, month, day)
         return date
 
-    def rename_move(self, file_path, year, month):
+    def rename_move(self, file_path, year, month, day):
         if self.is_image(file_path):
             if self.is_photo(file_path):
                 output = self.photo_output
@@ -205,19 +209,20 @@ class Classifier():
         else:
             raise Exception('移动文件失败, 非图片或视频: {}'.format(file_path))
 
-        new_path = os.path.join(output, year, month)
+        new_path = os.path.join(output, year, month, day)
         if not os.path.exists(new_path):
             os.makedirs(new_path)
         file_name, file_ext = os.path.splitext(file_path)
-        new_name = year + '-' + month + '-' + str(time.time()) + file_ext
+        new_name = year + '-' + month + '-' + day + '-' + str(time.time()) + file_ext
         shutil.move(file_path, os.path.join(new_path, new_name))
         return new_name
 
 
-cf = Classifier(input_folder='D:/temp/相册',
-                photo_output='D:/总仓库-照片视频/总照片备份',
-                video_output='D:/总仓库-照片视频/总视频备份',
-                image_output='D:/总仓库-照片视频/总图片备份')
+cf = Classifier(
+    input_folder='D:/temp/相册',
+    # input_folder='z:/待分类照片视频/Picture',
+    photo_output='D:/总仓库-照片视频/总照片备份',
+    video_output='D:/总仓库-照片视频/总视频备份',
+    image_output='D:/总仓库-照片视频/总图片备份')
 
-# cf.create_table()
 cf.start()
