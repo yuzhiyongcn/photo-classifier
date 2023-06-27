@@ -21,12 +21,13 @@ from win32com.propsys import propsys, pscon
 class Classifier():
     mode = 'prod'  # 开发模式(dev)还是产品模式(prod)
     IMAGE_EXTENTIONS = ['jpg', 'jpeg', 'bmp', 'png', 'tif', 'gif']
-    VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'mov', 'ppt', 'amr', 'mpg']
+    VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'mov', 'amr', 'mpg']
     TEST_TABLE = 'TEST_PHOTO'
     TABLE = 'PHOTO'
     PHOTO_NO_DATE_KEYS = ['EXIF ExifVersion']
     PHOTO_DATE_KEYS = ['Image DateTime', 'EXIF DateTimeOriginal']
     PHOTO_EXIF_KEYS = PHOTO_NO_DATE_KEYS + PHOTO_DATE_KEYS
+    SKIP_FOLDERS = ['System Volume Information', '$RECYCLE.BIN', '.stfolder']
 
     def __init__(self, input_folder, photo_output, video_output, image_output):
         self.input = input_folder
@@ -76,6 +77,8 @@ class Classifier():
     def delete_folders(self, folder):
         for (root, dirs, files) in os.walk(folder):
             for dir in dirs:
+                if dir in self.SKIP_FOLDERS:
+                    continue
                 abs_path = os.path.join(root, dir)
                 if os.path.isdir(abs_path):
                     if self.get_file_count(abs_path) == 0:
@@ -114,16 +117,19 @@ class Classifier():
 
     def process_file(self, root, file):
         file_path = os.path.join(root, file)
-        md5 = self.get_md5(file_path)
-        try:
-            self.validate(file_path, md5)
-            year, month, day = self.read_date(file_path)
-            new_name = self.rename_move(file_path, year, month, day)
-            self.add_record(md5)
-            self.processed_count += 1
-            print('已处理 {}: {} --> {}'.format(self.processed_count, file, new_name))
-        except Exception as e:
-            print(str(e))
+        if self.is_image(file_path) or self.is_video(file_path):
+            md5 = self.get_md5(file_path)
+            try:
+                self.validate(file_path, md5)
+                year, month, day = self.read_date(file_path)
+                new_name = self.rename_move(file_path, year, month, day)
+                self.add_record(md5)
+                self.processed_count += 1
+                print('已处理 {}: {} --> {}'.format(self.processed_count, file, new_name))
+            except Exception as e:
+                print(str(e))
+        else:
+            print('非图片或视频, 忽略文件: {}'.format(file_path))
 
     def add_record(self, md5):
         try:
@@ -219,7 +225,7 @@ class Classifier():
 
 
 cf = Classifier(
-    input_folder='D:/temp/相册',
+    input_folder='D:/待分类照片视频',
     # input_folder='z:/待分类照片视频/Picture',
     photo_output='D:/总仓库-照片视频/总照片备份',
     video_output='D:/总仓库-照片视频/总视频备份',
