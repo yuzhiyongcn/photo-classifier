@@ -18,7 +18,7 @@ import pytz
 from win32com.propsys import propsys, pscon
 
 
-class Classifier():
+class Classifier1():
     mode = 'prod'  # 开发模式(dev)还是产品模式(prod)
     IMAGE_EXTENTIONS = ['jpg', 'jpeg', 'bmp', 'png', 'tif', 'gif', 'heic']
     VIDEO_EXTENTIONS = ['mp4', 'avi', 'rmvb', 'mkv', 'mov', 'amr', 'mpg']
@@ -39,7 +39,7 @@ class Classifier():
         pass
 
     def connect_database(self):
-        self.db = pymysql.connect(host='bt.biggerfish.tech', user='admin', password='zhiyong214', database='photo_classifier')
+        self.db = pymysql.connect(host='nas.zhiyong.tech', user='admin', password='zhiyong@214', database='photo_classifier', port=3307)
 
     def close_database(self):
         self.db.close()
@@ -224,12 +224,12 @@ class Classifier():
         return new_name
 
 
-cf = Classifier(
-    input_folder='D:/待分类照片视频',
+cf = Classifier1(
+    input_folder='D:/待分类照片视频1',
     # input_folder='z:/待分类照片视频/Picture',
-    photo_output='D:/总仓库-照片视频/总照片备份',
-    video_output='D:/总仓库-照片视频/总视频备份',
-    image_output='D:/总仓库-照片视频/总图片备份')
+    photo_output='D:/总仓库-照片视频1/总照片备份',
+    video_output='D:/总仓库-照片视频1/总视频备份',
+    image_output='D:/总仓库-照片视频1/总图片备份')
 
 cf.start()
 # cf.create_table()
