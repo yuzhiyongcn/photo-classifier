@@ -39,7 +39,7 @@ class Classifier1():
         pass
 
     def connect_database(self):
-        self.db = pymysql.connect(host='nas.zhiyong.tech', user='admin', password='zhiyong@214', database='photo_classifier', port=3307)
+        self.db = pymysql.connect(host='northflyfish.myqnapcloud.cn', user='admin', password='zhiyong@214', database='photo_classifier', port=3307)
 
     def close_database(self):
         self.db.close()
