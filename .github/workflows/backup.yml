@@ -1,0 +1,31 @@
+name: Backup to Gitea
+
+on:
+  push:
+    branches:
+      - main  # 你可以根据需要修改分支名称
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Fetch all history for all branches and tags
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "biggerfish"
+          git config --global user.email "yuzhiyongcn@qq.com"
+
+      - name: Add Gitea remote
+        run: |
+          REPO_NAME=$(basename ${{ github.repository }})
+          git remote add gitea https://yu:${{secrets.GITEA_TOKEN}}@git.zhiyong.tech/yu/$REPO_NAME.git
+
+      - name: Push to Gitea
+        run: |
+          git push -u gitea --all --force
+          git push -u gitea --tags --force
