@@ -237,7 +237,7 @@ class Classifier:
 
 cf = Classifier(
     input_folder="D:/待分类照片视频",
-    # input_folder="D:/总仓库-照片视频-bak",
+    # input_folder="D:/beam-pro",
     photo_output="D:/总仓库-照片视频/总照片备份",
     video_output="D:/总仓库-照片视频/总视频备份",
     image_output="D:/总仓库-照片视频/总图片备份",
