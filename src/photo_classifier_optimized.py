@@ -180,31 +180,47 @@ class PhotoClassifierOptimized:
                 self.logger.error(f"关闭数据库错误: {e}")
     
     def create_table(self) -> None:
-        """Create optimized database table structure"""
+        """Create optimized database table structure with statistics"""
         try:
             self.connect_database()
             cursor = self.db.cursor()
             
-            # Drop existing table if exists
+            # Drop existing tables if exists
             cursor.execute(f"DROP TABLE IF EXISTS {self.table_name}")
-            self.logger.info(f"删除现有表: {self.table_name}")
+            cursor.execute("DROP TABLE IF EXISTS STATISTICS")
+            self.logger.info(f"删除现有表: {self.table_name}, STATISTICS")
             
             # Create new optimized table structure (removed ORIGINAL_PATH and NEW_PATH)
             sql = f"""CREATE TABLE {self.table_name} (
                 ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 MD5 TEXT NOT NULL UNIQUE,
                 FILE_SIZE INTEGER NOT NULL,
+                FILE_TYPE TEXT NOT NULL,  -- 'photo', 'image', 'video'
                 CREATED_DATE TEXT,
                 PROCESSED_DATE TEXT DEFAULT CURRENT_TIMESTAMP
             )"""
             cursor.execute(sql)
             
+            # Create simple statistics table
+            stats_sql = """CREATE TABLE STATISTICS (
+                ID INTEGER PRIMARY KEY DEFAULT 1,
+                PHOTO_COUNT INTEGER DEFAULT 0,     -- 照片数量（有EXIF）
+                IMAGE_COUNT INTEGER DEFAULT 0,     -- 图片数量（无EXIF）
+                VIDEO_COUNT INTEGER DEFAULT 0,     -- 视频数量
+                UPDATED_DATE TEXT DEFAULT CURRENT_TIMESTAMP
+            )"""
+            cursor.execute(stats_sql)
+            
             # Create indexes for better performance
             cursor.execute(f"CREATE INDEX idx_md5 ON {self.table_name}(MD5)")
             cursor.execute(f"CREATE INDEX idx_size_date ON {self.table_name}(FILE_SIZE, CREATED_DATE)")
+            cursor.execute(f"CREATE INDEX idx_file_type ON {self.table_name}(FILE_TYPE)")
+            
+            # Initialize statistics record
+            cursor.execute("INSERT INTO STATISTICS (ID, PHOTO_COUNT, IMAGE_COUNT, VIDEO_COUNT) VALUES (1, 0, 0, 0)")
             
             self.db.commit()
-            self.logger.info(f"创建优化后的表: {self.table_name} (支持快速预检查)")
+            self.logger.info(f"创建优化后的表: {self.table_name}, STATISTICS (支持快速预检查和分类统计)")
             
         except sqlite3.Error as e:
             self.logger.error(f"创建表失败: {e}")
@@ -220,8 +236,9 @@ class PhotoClassifierOptimized:
             self.connect_database()
             cursor = self.db.cursor()
             cursor.execute(f"DROP TABLE IF EXISTS {self.table_name}")
+            cursor.execute("DROP TABLE IF EXISTS STATISTICS")
             self.db.commit()
-            self.logger.info(f"删除表: {self.table_name}")
+            self.logger.info(f"删除表: {self.table_name}, STATISTICS")
         except sqlite3.Error as e:
             self.logger.error(f"删除表失败: {e}")
             raise
@@ -234,9 +251,9 @@ class PhotoClassifierOptimized:
             self.connect_database()
             cursor = self.db.cursor()
             
-            print("=" * 50)
+            print("=" * 60)
             print("数据库信息")  
-            print("=" * 50)
+            print("=" * 60)
             print(f"📍 数据库文件: {self.db_path}")
             print(f"📋 表名: {self.table_name}")
             
@@ -246,8 +263,23 @@ class PhotoClassifierOptimized:
                 # Get record count
                 cursor.execute(f"SELECT COUNT(*) FROM {self.table_name}")
                 count = cursor.fetchone()[0]
-                print(f"📊 记录数量: {count}")
+                print(f"📊 总记录数量: {count}")
                 
+                # Show statistics if available
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='STATISTICS'")
+                if cursor.fetchone():
+                    cursor.execute("SELECT PHOTO_COUNT, IMAGE_COUNT, VIDEO_COUNT, UPDATED_DATE FROM STATISTICS WHERE ID=1")
+                    stats = cursor.fetchone()
+                    if stats:
+                        photo_count, image_count, video_count, updated_date = stats
+                        print()
+                        print("📈 分类统计:")
+                        print(f"   📸 照片数量（有EXIF）: {photo_count}")
+                        print(f"   🖼️  图片数量（无EXIF）: {image_count}")
+                        print(f"   🎬 视频数量: {video_count}")
+                        print(f"   🕒 更新时间: {updated_date}")
+                
+                print()
                 # Get table schema
                 cursor.execute(f"PRAGMA table_info({self.table_name})")
                 columns = cursor.fetchall()
@@ -263,7 +295,7 @@ class PhotoClassifierOptimized:
                     print(f"   {idx[1]}")
             else:
                 print("❌ 表不存在")
-            print("=" * 50)
+            print("=" * 60)
             
         except sqlite3.Error as e:
             print(f"❌ 数据库错误: {e}")
@@ -283,18 +315,18 @@ class PhotoClassifierOptimized:
                 return
             
             # Get recent records (updated for new schema)
-            cursor.execute(f"SELECT MD5, FILE_SIZE, CREATED_DATE, PROCESSED_DATE FROM {self.table_name} ORDER BY ID DESC LIMIT ?", (limit,))
+            cursor.execute(f"SELECT MD5, FILE_SIZE, FILE_TYPE, CREATED_DATE, PROCESSED_DATE FROM {self.table_name} ORDER BY ID DESC LIMIT ?", (limit,))
             records = cursor.fetchall()
             
-            print("=" * 70)
+            print("=" * 80)
             print(f"最近 {len(records)} 条记录")
-            print("=" * 70)
+            print("=" * 80)
             
             if records:
-                print(f"{'MD5':<20} {'文件大小':<10} {'创建日期':<12} {'处理时间'}")
-                print("-" * 70)
+                print(f"{'MD5':<20} {'大小':<8} {'类型':<6} {'创建日期':<12} {'处理时间'}")
+                print("-" * 80)
                 for record in records:
-                    md5, file_size, created_date, processed_date = record
+                    md5, file_size, file_type, created_date, processed_date = record
                     # Format file size
                     if file_size > 1024 * 1024:
                         size_str = f"{file_size//1024//1024}MB"
@@ -302,10 +334,14 @@ class PhotoClassifierOptimized:
                         size_str = f"{file_size//1024}KB"
                     else:
                         size_str = f"{file_size}B"
-                    print(f"{md5[:8]}...{md5[-8:]} {size_str:<10} {created_date:<12} {processed_date[:19]}")
+                    
+                    # Format file type display
+                    type_display = {"photo": "📸照片", "image": "🖼️图片", "video": "🎬视频"}.get(file_type, file_type)
+                    
+                    print(f"{md5[:8]}...{md5[-8:]} {size_str:<8} {type_display:<6} {created_date:<12} {processed_date[:19]}")
             else:
                 print("📭 数据库为空")
-            print("=" * 70)
+            print("=" * 80)
             
         except sqlite3.Error as e:
             print(f"❌ 数据库错误: {e}")
@@ -494,13 +530,13 @@ class PhotoClassifierOptimized:
             self.logger.error(f"移动文件 {file_path} 到 {target_path} 失败: {e}")
             raise
     
-    def add_record(self, md5: str, file_size: int, created_date: str) -> None:
+    def add_record(self, md5: str, file_size: int, file_type: str, created_date: str) -> None:
         """Add file record to database with optimized metadata (removed path fields)"""
         try:
             cursor = self.db.cursor()
             cursor.execute(
-                f"INSERT INTO {self.table_name}(MD5, FILE_SIZE, CREATED_DATE) VALUES(?,?,?)",
-                (md5, file_size, created_date)
+                f"INSERT INTO {self.table_name}(MD5, FILE_SIZE, FILE_TYPE, CREATED_DATE) VALUES(?,?,?,?)",
+                (md5, file_size, file_type, created_date)
             )
             self.db.commit()
         except sqlite3.Error as e:
@@ -535,6 +571,14 @@ class PhotoClassifierOptimized:
             # Validate (check for duplicates)
             self.validate_file(file_path, md5)
             
+            # Determine file type
+            if self.is_photo(file_path):
+                file_type = "photo"
+            elif self.is_video(file_path):
+                file_type = "video"
+            else:
+                file_type = "image"  # Image without EXIF
+            
             # Extract date
             year, month, day = self.read_date(file_path)
             created_date = f"{year}-{month}-{day}"
@@ -543,7 +587,7 @@ class PhotoClassifierOptimized:
             new_name = self.rename_move(file_path, year, month, day, md5)
             
             # Add record to database (without path information)
-            self.add_record(md5, file_size, created_date)
+            self.add_record(md5, file_size, file_type, created_date)
             
             self.processed_count += 1
             self.logger.info(f"已处理 ({self.processed_count}): {filename} -> {new_name}")
@@ -582,6 +626,37 @@ class PhotoClassifierOptimized:
         
         self.logger.info(f"删除了 {deleted_count} 个空目录")
     
+    def update_statistics(self) -> None:
+        """Update statistics table with current data"""
+        try:
+            cursor = self.db.cursor()
+            
+            # Count files by type
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_name} WHERE FILE_TYPE='photo'")
+            photo_count = cursor.fetchone()[0]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_name} WHERE FILE_TYPE='image'")
+            image_count = cursor.fetchone()[0]
+            
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_name} WHERE FILE_TYPE='video'")
+            video_count = cursor.fetchone()[0]
+            
+            # Update statistics table
+            cursor.execute("""
+                UPDATE STATISTICS SET 
+                    PHOTO_COUNT = ?, 
+                    IMAGE_COUNT = ?, 
+                    VIDEO_COUNT = ?, 
+                    UPDATED_DATE = CURRENT_TIMESTAMP 
+                WHERE ID = 1
+            """, (photo_count, image_count, video_count))
+            
+            self.db.commit()
+            self.logger.info(f"更新统计数据: 照片{photo_count}张, 图片{image_count}张, 视频{video_count}个")
+            
+        except sqlite3.Error as e:
+            self.logger.error(f"更新统计数据失败: {e}")
+
     def generate_report(self) -> None:
         """Generate processing report with optimization statistics"""
         self.logger.info("=" * 60)
@@ -607,6 +682,9 @@ class PhotoClassifierOptimized:
             self.process_folder(self.input_folder)
             self.delete_empty_folders(self.input_folder)
             
+            # Update statistics after processing
+            self.update_statistics()
+            
         except Exception as e:
             self.logger.error(f"处理期间致命错误: {e}")
             raise
@@ -621,12 +699,13 @@ class PhotoClassifierOptimized:
 
 def main():
     """Main function with command line argument support"""
-    parser = argparse.ArgumentParser(description="Photo Classifier - Fast Pre-check Optimized Version")
+    parser = argparse.ArgumentParser(description="Photo Classifier - Fast Pre-check Optimized Version with Statistics")
     parser.add_argument("--config", default="config.json", help="Configuration file path")
     parser.add_argument("--create-table", action="store_true", help="Create/recreate database table")
     parser.add_argument("--drop-table", action="store_true", help="Drop existing database table")
     parser.add_argument("--list-records", action="store_true", help="List all records in database")
     parser.add_argument("--db-info", action="store_true", help="Show database information")
+    parser.add_argument("--stats", action="store_true", help="Update and show statistics")
     parser.add_argument("--input", help="Override input folder from config")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
     
@@ -649,7 +728,7 @@ def main():
         if args.create_table:
             print("正在创建/重建数据库表...")
             classifier.create_table()
-            print("✅ 数据库表创建完成（支持快速预检查）")
+            print("✅ 数据库表创建完成（支持快速预检查和统计）")
             print(f"📍 数据库位置: {classifier.db_path}")
             print(f"📋 表名: {classifier.table_name}")
             return
@@ -666,6 +745,15 @@ def main():
         
         if args.list_records:
             classifier._list_records()
+            return
+        
+        if args.stats:
+            print("正在更新统计数据...")
+            classifier.connect_database()
+            classifier.update_statistics()
+            classifier.close_database()
+            print("✅ 统计数据更新完成")
+            classifier._show_db_info()
             return
         
         # Start processing
@@ -685,6 +773,7 @@ if __name__ == "__main__":
     # sys.argv = ["script_name", "--create-table"]              # 创建数据库表
     # sys.argv = ["script_name", "--db-info"]                   # 查看数据库信息  
     # sys.argv = ["script_name", "--list-records"]              # 查看最近记录
+    # sys.argv = ["script_name", "--stats"]                     # 更新并显示统计数据
     # sys.argv = ["script_name", "--drop-table"]                # 删除数据库表
     # sys.argv = ["script_name", "--verbose"]                   # 启用详细日志
     # sys.argv = ["script_name", "--input", "D:\\test\\input"]  # 自定义输入目录
