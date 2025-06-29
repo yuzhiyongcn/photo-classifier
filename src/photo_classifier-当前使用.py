@@ -12,12 +12,12 @@ import exifread
 import time
 import shutil
 import hashlib
-import pymysql
+import sqlite3
 import datetime
 import pytz
 from win32com.propsys import propsys, pscon
 
-# 使用韩国oracle 数据库
+# 使用SQLite数据库
 
 
 class Classifier:
@@ -38,15 +38,16 @@ class Classifier:
         self.image_output = image_output
         self.processed_count = 0
         self.table = self.TEST_TABLE if self.mode == "dev" else self.TABLE
+        # Ensure database directory exists
+        self.db_dir = "database"
+        if not os.path.exists(self.db_dir):
+            os.makedirs(self.db_dir)
+        self.db_path = os.path.join(self.db_dir, "photo_classifier.db")
         pass
 
     def connect_database(self):
-        self.db = pymysql.connect(
-            host="panel.zhiyong.tech",
-            user="yu_biggerfish",
-            password="jRHTbQrdkfNNTztH",
-            database="photo_classifier",
-        )
+        # Connect to SQLite database
+        self.db = sqlite3.connect(self.db_path)
 
     def close_database(self):
         self.db.close()
@@ -59,16 +60,15 @@ class Classifier:
         cursor.execute(sql)
         print("删除表 {}".format(self.table))
 
+        # SQLite syntax for table creation
         sql = """CREATE TABLE {} (
-            ID INT NOT NULL AUTO_INCREMENT ,
-            MD5 VARCHAR(255) NOT NULL ,
-            PRIMARY KEY (ID), UNIQUE (MD5))
-            ENGINE = InnoDB;""".format(
-            self.table
-        )
+            ID INTEGER PRIMARY KEY AUTOINCREMENT,
+            MD5 TEXT NOT NULL UNIQUE
+        )""".format(self.table)
         cursor.execute(sql)
         print("创建表 {}".format(self.table))
 
+        self.db.commit()
         self.close_database()
 
     def start(self):
@@ -145,8 +145,9 @@ class Classifier:
     def add_record(self, md5):
         try:
             cursor = self.db.cursor()
-            sql = "INSERT INTO {}(MD5) VALUES('{}')".format(self.table, md5)
-            cursor.execute(sql)
+            # Use parameterized query for SQLite
+            sql = "INSERT INTO {}(MD5) VALUES(?)".format(self.table)
+            cursor.execute(sql, (md5,))
             self.db.commit()
         except Exception as e:
             print("插入记录 {} 到数据库photo_classifier失败: {}".format(md5, str(e)))
@@ -157,10 +158,11 @@ class Classifier:
         # check if the md5 of the photo exists in database
         try:
             cursor = self.db.cursor()
-            sql = "SELECT MD5 FROM {} WHERE MD5='{}'".format(self.table, md5)
-            cursor.execute(sql)
+            # Use parameterized query for SQLite
+            sql = "SELECT MD5 FROM {} WHERE MD5=?".format(self.table)
+            cursor.execute(sql, (md5,))
             record = cursor.fetchone()
-            if str(record) != "None":
+            if record is not None:
                 os.remove(file_path)
                 raise Exception("重复文件 {} --> 删除".format(file_path))
         except Exception as e:
@@ -237,6 +239,7 @@ class Classifier:
 
 cf = Classifier(
     input_folder="D:/待分类照片视频",
+    # input_folder="D:/down/需整理"
     # input_folder="D:/总仓库-照片视频-bak",
     photo_output="D:/总仓库-照片视频/总照片备份",
     video_output="D:/总仓库-照片视频/总视频备份",
