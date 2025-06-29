@@ -1,6 +1,13 @@
 """
-Photo Classifier - Optimized Version with Fast Pre-check
-自动根据创建日期分类和整理照片视频，支持快速预检查避免重复计算hash
+Photo Classifier - Multithreaded Optimized Version with Fast Pre-check
+自动根据创建日期分类和整理照片视频，支持多线程处理和快速预检查避免重复计算hash
+
+Features:
+- 🚀 Multi-threaded processing for improved performance
+- ⚡ Fast pre-check using file size + date to skip duplicate MD5 calculations
+- 🔒 Thread-safe database operations with WAL mode
+- 📊 Detailed statistics and progress reporting
+- 🛡️  Comprehensive error handling and logging
 """
 
 import os
@@ -15,9 +22,109 @@ import hashlib
 import sqlite3
 import datetime
 import pytz
+import threading
+import queue
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from win32com.propsys import propsys, pscon
+
+
+@dataclass
+class FileProcessResult:
+    """文件处理结果"""
+    md5: str
+    file_size: int
+    file_type: str
+    created_date: str
+    original_path: str
+    new_path: str
+    success: bool
+    error_message: Optional[str] = None
+
+
+class ThreadSafeDatabase:
+    """线程安全的数据库管理器"""
+    
+    def __init__(self, db_path: str, table_name: str):
+        self.db_path = db_path
+        self.table_name = table_name
+        self._local = threading.local()
+        self._write_lock = threading.Lock()  # 写操作锁
+        self._setup_database()
+    
+    def _setup_database(self):
+        """设置数据库（启用WAL模式提升并发性能）"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            # Enable WAL mode for better concurrent access
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=10000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.close()
+        except sqlite3.Error as e:
+            print(f"数据库设置失败: {e}")
+    
+    def get_connection(self):
+        """获取线程本地数据库连接"""
+        if not hasattr(self._local, 'connection'):
+            self._local.connection = sqlite3.connect(
+                self.db_path, 
+                check_same_thread=False,
+                timeout=30.0
+            )
+            self._local.connection.execute("PRAGMA journal_mode=WAL")
+        return self._local.connection
+    
+    def check_file_exists(self, file_size: int, created_date: str) -> bool:
+        """线程安全的快速预检查"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT MD5 FROM {self.table_name} WHERE FILE_SIZE=? AND CREATED_DATE=?",
+                (file_size, created_date)
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error:
+            return False
+    
+    def check_duplicate(self, md5: str) -> bool:
+        """检查重复文件（线程安全读操作）"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT MD5 FROM {self.table_name} WHERE MD5=?", (md5,))
+            return cursor.fetchone() is not None
+        except sqlite3.Error:
+            return False
+    
+    def batch_add_records(self, results: List[FileProcessResult]) -> int:
+        """批量添加记录（线程安全写操作）"""
+        with self._write_lock:  # 串行化写操作
+            try:
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                added_count = 0
+                
+                conn.execute("BEGIN TRANSACTION")
+                for result in results:
+                    if result.success:
+                        try:
+                            cursor.execute(
+                                f"INSERT INTO {self.table_name}(MD5, FILE_SIZE, FILE_TYPE, CREATED_DATE) VALUES(?,?,?,?)",
+                                (result.md5, result.file_size, result.file_type, result.created_date)
+                            )
+                            added_count += 1
+                        except sqlite3.IntegrityError:
+                            continue  # Skip duplicates
+                conn.commit()
+                return added_count
+            except sqlite3.Error as e:
+                conn.rollback()
+                raise e
 
 
 class ConfigManager:
@@ -92,20 +199,34 @@ class PhotoClassifierOptimized:
         self.timezone = self.config.get('timezone', 'Asia/Shanghai')
         self.min_file_size = self.config.get('performance.min_file_size', 1024)
         
-        # Initialize counters
+        # Initialize counters (thread-safe)
+        self._counter_lock = threading.Lock()
         self.processed_count = 0
         self.error_count = 0
         self.duplicate_count = 0
         self.skipped_count = 0  # 快速跳过的文件数
         
-        # Database connection
-        self.db = None
+        # Multithreading settings
+        self.enable_multithreading = self.config.get('performance.enable_multithreading', True)
+        self.max_workers = self.config.get('performance.max_workers', os.cpu_count())
+        self.batch_size = self.config.get('performance.batch_size', 50)
+        
+        # Database connections
+        self.db = None  # Main database connection
         self.db_path = os.path.join(self.db_dir, self.db_file)
+        self.thread_safe_db = None  # Will be initialized when needed
         
         # Validate configuration
         self._validate_paths()
         
-        self.logger.info("照片分类器初始化成功 - 支持快速预检查")
+        mode_desc = "多线程" if self.enable_multithreading else "单线程"
+        self.logger.info(f"照片分类器初始化成功 - 支持快速预检查 ({mode_desc})")
+    
+    def _increment_counter(self, counter_name: str) -> None:
+        """线程安全的计数器增加"""
+        with self._counter_lock:
+            current_value = getattr(self, counter_name)
+            setattr(self, counter_name, current_value + 1)
     
     def _setup_logging(self) -> None:
         """Setup logging configuration"""
@@ -544,8 +665,89 @@ class PhotoClassifierOptimized:
             self.db.rollback()
             raise
     
+    def process_file_single(self, file_path: str) -> FileProcessResult:
+        """处理单个文件（多线程安全版本）"""
+        try:
+            # Check file size
+            if not self.is_valid_file_size(file_path):
+                self.logger.debug(f"文件太小，跳过: {file_path}")
+                return None
+            
+            # Check if it's a supported file type
+            if not (self.is_image(file_path) or self.is_video(file_path)):
+                self.logger.debug(f"不支持的文件类型，跳过: {file_path}")
+                return None
+            
+            # Get file metadata for fast pre-check
+            file_size = os.path.getsize(file_path)
+            year, month, day = self.read_date(file_path)
+            created_date = f"{year}-{month}-{day}"
+            
+            # 🚀 Fast pre-check using thread-safe database
+            if self.thread_safe_db.check_file_exists(file_size, created_date):
+                self.logger.debug(f"文件已存在（大小+日期匹配），跳过: {file_path}")
+                self._increment_counter('skipped_count')
+                return None
+            
+            # Calculate MD5 (this is the expensive operation)
+            self.logger.debug(f"开始计算MD5: {file_path}")
+            md5 = self.get_md5(file_path)
+            
+            # Check for MD5 duplicates
+            if self.thread_safe_db.check_duplicate(md5):
+                self.logger.warning(f"发现重复文件（MD5相同）: {file_path}")
+                try:
+                    os.remove(file_path)
+                    self._increment_counter('duplicate_count')
+                except OSError as e:
+                    self.logger.error(f"删除重复文件失败: {e}")
+                return None
+            
+            # Determine file type
+            if self.is_photo(file_path):
+                file_type = "photo"
+            elif self.is_video(file_path):
+                file_type = "video"
+            else:
+                file_type = "image"  # Image without EXIF
+            
+            # Move and rename file
+            new_name = self.rename_move(file_path, year, month, day, md5)
+            new_path = os.path.join(
+                self.photo_output if file_type == "photo" else 
+                (self.video_output if file_type == "video" else self.image_output),
+                year, month, day, new_name
+            )
+            
+            self._increment_counter('processed_count')
+            self.logger.info(f"已处理 ({self.processed_count}): {os.path.basename(file_path)} -> {new_name}")
+            
+            return FileProcessResult(
+                md5=md5,
+                file_size=file_size,
+                file_type=file_type,
+                created_date=created_date,
+                original_path=file_path,
+                new_path=new_path,
+                success=True
+            )
+            
+        except Exception as e:
+            self._increment_counter('error_count')
+            self.logger.error(f"处理 {file_path} 错误: {e}")
+            return FileProcessResult(
+                md5="",
+                file_size=0,
+                file_type="",
+                created_date="",
+                original_path=file_path,
+                new_path="",
+                success=False,
+                error_message=str(e)
+            )
+    
     def process_file(self, root: str, filename: str) -> None:
-        """Process a single file with fast pre-check and comprehensive error handling"""
+        """Process a single file with fast pre-check and comprehensive error handling (legacy method)"""
         file_path = os.path.join(root, filename)
         
         try:
@@ -596,16 +798,81 @@ class PhotoClassifierOptimized:
             self.error_count += 1
             self.logger.error(f"处理 {file_path} 错误: {e}")
     
-    def process_folder(self, folder: str) -> None:
-        """Process all files in folder recursively"""
-        self.logger.info(f"开始处理文件夹: {folder}")
+    def collect_files(self, folder: str) -> List[str]:
+        """收集所有需要处理的文件"""
+        file_paths = []
+        self.logger.info(f"收集文件: {folder}")
         
         for root, dirs, files in os.walk(folder):
             # Skip system folders
             dirs[:] = [d for d in dirs if d not in self.skip_folders]
             
             for filename in files:
-                self.process_file(root, filename)
+                file_path = os.path.join(root, filename)
+                if (self.is_image(file_path) or self.is_video(file_path)) and self.is_valid_file_size(file_path):
+                    file_paths.append(file_path)
+        
+        self.logger.info(f"发现 {len(file_paths)} 个符合条件的文件")
+        return file_paths
+    
+    def process_folder_multithreaded(self, folder: str) -> None:
+        """多线程处理文件夹"""
+        self.logger.info(f"开始多线程处理文件夹: {folder} (工作线程: {self.max_workers})")
+        
+        # Initialize thread-safe database
+        self.thread_safe_db = ThreadSafeDatabase(self.db_path, self.table_name)
+        
+        # Collect all files first
+        file_paths = self.collect_files(folder)
+        if not file_paths:
+            self.logger.info("没有找到需要处理的文件")
+            return
+        
+        # Process files in batches using thread pool
+        total_files = len(file_paths)
+        processed_batches = 0
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Process files in batches
+            for i in range(0, total_files, self.batch_size):
+                batch = file_paths[i:i + self.batch_size]
+                batch_results = []
+                
+                # Submit batch to thread pool
+                future_to_file = {
+                    executor.submit(self.process_file_single, file_path): file_path 
+                    for file_path in batch
+                }
+                
+                # Collect results
+                for future in as_completed(future_to_file):
+                    result = future.result()
+                    if result is not None:
+                        batch_results.append(result)
+                
+                # Batch write to database
+                if batch_results:
+                    try:
+                        added_count = self.thread_safe_db.batch_add_records(batch_results)
+                        processed_batches += 1
+                        self.logger.info(f"批次 {processed_batches} 完成，添加了 {added_count} 条记录")
+                    except Exception as e:
+                        self.logger.error(f"批量写入数据库失败: {e}")
+        
+        self.logger.info(f"多线程处理完成，总共处理了 {processed_batches} 个批次")
+    
+    def process_folder(self, folder: str) -> None:
+        """Process all files in folder recursively"""
+        if self.enable_multithreading:
+            self.process_folder_multithreaded(folder)
+        else:
+            self.logger.info(f"开始单线程处理文件夹: {folder}")
+            for root, dirs, files in os.walk(folder):
+                # Skip system folders
+                dirs[:] = [d for d in dirs if d not in self.skip_folders]
+                
+                for filename in files:
+                    self.process_file(root, filename)
     
     def delete_empty_folders(self, folder: str) -> None:
         """Delete empty folders after processing"""
@@ -658,10 +925,15 @@ class PhotoClassifierOptimized:
             self.logger.error(f"更新统计数据失败: {e}")
 
     def generate_report(self) -> None:
-        """Generate processing report with optimization statistics"""
+        """Generate processing report with optimization and multithreading statistics"""
         self.logger.info("=" * 60)
         self.logger.info("📊 处理报告")
         self.logger.info("=" * 60)
+        mode = "多线程" if self.enable_multithreading else "单线程"
+        if self.enable_multithreading:
+            self.logger.info(f"🔧 处理模式: {mode} (工作线程: {self.max_workers}, 批量大小: {self.batch_size})")
+        else:
+            self.logger.info(f"🔧 处理模式: {mode}")
         self.logger.info(f"✅ 已处理文件: {self.processed_count}")
         self.logger.info(f"⚡ 快速跳过: {self.skipped_count}")
         self.logger.info(f"🔄 发现重复: {self.duplicate_count}")
@@ -699,7 +971,7 @@ class PhotoClassifierOptimized:
 
 def main():
     """Main function with command line argument support"""
-    parser = argparse.ArgumentParser(description="Photo Classifier - Fast Pre-check Optimized Version with Statistics")
+    parser = argparse.ArgumentParser(description="Photo Classifier - Multithreaded Fast Pre-check Optimized Version")
     parser.add_argument("--config", default="config.json", help="Configuration file path")
     parser.add_argument("--create-table", action="store_true", help="Create/recreate database table")
     parser.add_argument("--drop-table", action="store_true", help="Drop existing database table")
@@ -708,6 +980,9 @@ def main():
     parser.add_argument("--stats", action="store_true", help="Update and show statistics")
     parser.add_argument("--input", help="Override input folder from config")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--single-thread", action="store_true", help="Force single-threaded mode")
+    parser.add_argument("--max-workers", type=int, help="Maximum number of worker threads")
+    parser.add_argument("--batch-size", type=int, help="Batch size for processing files")
     
     args = parser.parse_args()
     
@@ -719,6 +994,19 @@ def main():
         if args.input:
             classifier.input_folder = args.input
             classifier.logger.info(f"输入文件夹已覆盖为: {args.input}")
+        
+        # Set multithreading options
+        if args.single_thread:
+            classifier.enable_multithreading = False
+            classifier.logger.info("强制使用单线程模式")
+        
+        if args.max_workers:
+            classifier.max_workers = args.max_workers
+            classifier.logger.info(f"最大工作线程数设置为: {args.max_workers}")
+        
+        if args.batch_size:
+            classifier.batch_size = args.batch_size
+            classifier.logger.info(f"批量处理大小设置为: {args.batch_size}")
         
         # Set verbose logging if requested
         if args.verbose:
@@ -770,16 +1058,27 @@ if __name__ == "__main__":
     
     # 💡 取消注释你需要的功能（只能同时启用一个）：
     
-    # sys.argv = ["script_name", "--create-table"]              # 创建数据库表
+    # === 数据库操作 ===
+    sys.argv = ["script_name", "--create-table"]              # 创建数据库表
     # sys.argv = ["script_name", "--db-info"]                   # 查看数据库信息  
     # sys.argv = ["script_name", "--list-records"]              # 查看最近记录
     # sys.argv = ["script_name", "--stats"]                     # 更新并显示统计数据
     # sys.argv = ["script_name", "--drop-table"]                # 删除数据库表
+    
+    # === 处理模式 ===
     # sys.argv = ["script_name", "--verbose"]                   # 启用详细日志
+    # sys.argv = ["script_name", "--single-thread"]             # 强制单线程模式
+    # sys.argv = ["script_name", "--max-workers", "8"]          # 设置最大线程数
+    # sys.argv = ["script_name", "--batch-size", "100"]         # 设置批处理大小
+    
+    # === 自定义配置 ===
     # sys.argv = ["script_name", "--input", "D:\\test\\input"]  # 自定义输入目录
     # sys.argv = ["script_name", "--config", "my_config.json"]  # 自定义配置文件
     
-    # 默认运行：照片分类处理（注释掉上面所有选项时使用）
+    # === 组合使用示例 ===
+    # sys.argv = ["script_name", "--verbose", "--max-workers", "6", "--batch-size", "50"]  # 多线程详细模式
+    
+    # 默认运行：多线程照片分类处理（注释掉上面所有选项时使用）
     # sys.argv = ["script_name"]  
     
     main() 
