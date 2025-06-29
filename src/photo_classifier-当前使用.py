@@ -21,10 +21,8 @@ from win32com.propsys import propsys, pscon
 
 
 class Classifier:
-    mode = "prod"  # 开发模式(dev)还是产品模式(prod)
     IMAGE_EXTENTIONS = ["jpg", "jpeg", "bmp", "png", "tif", "gif", "heic"]
     VIDEO_EXTENTIONS = ["mp4", "avi", "rmvb", "mkv", "mov", "amr", "mpg"]
-    TEST_TABLE = "TEST_PHOTO"
     TABLE = "PHOTO"
     PHOTO_NO_DATE_KEYS = ["EXIF ExifVersion"]
     PHOTO_DATE_KEYS = ["Image DateTime", "EXIF DateTimeOriginal"]
@@ -37,7 +35,7 @@ class Classifier:
         self.video_output = video_output
         self.image_output = image_output
         self.processed_count = 0
-        self.table = self.TEST_TABLE if self.mode == "dev" else self.TABLE
+        self.table = self.TABLE
         # Ensure database directory exists
         self.db_dir = "database"
         if not os.path.exists(self.db_dir):
@@ -238,13 +236,17 @@ class Classifier:
 
 
 cf = Classifier(
-    input_folder="D:/待分类照片视频",
+    # input_folder="D:/待分类照片视频",
+    input_folder=r"D:\temp\test\input",
     # input_folder="D:/down/需整理"
     # input_folder="D:/总仓库-照片视频-bak",
     # input_folder="D:/beam-pro",
-    photo_output="D:/总仓库-照片视频/总照片备份",
-    video_output="D:/总仓库-照片视频/总视频备份",
-    image_output="D:/总仓库-照片视频/总图片备份",
+    # photo_output="D:/总仓库-照片视频/总照片备份",
+    # video_output="D:/总仓库-照片视频/总视频备份",
+    # image_output="D:/总仓库-照片视频/总图片备份",
+    photo_output=r"D:\temp\test\output\photo",
+    video_output=r"D:\temp\test\output\video",
+    image_output=r"D:\temp\test\output\image",
 )
 
 cf.start()

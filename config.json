@@ -1,0 +1,34 @@
+{
+    "paths": {
+        "input_folder": "D:\\temp\\test\\input",
+        "photo_output": "D:\\temp\\test\\output\\photo",
+        "video_output": "D:\\temp\\test\\output\\video",
+        "image_output": "D:\\temp\\test\\output\\image",
+        "database_dir": "database",
+        "database_file": "photo_classifier.db"
+    },
+    "supported_formats": {
+        "image_extensions": ["jpg", "jpeg", "bmp", "png", "tif", "gif", "heic"],
+        "video_extensions": ["mp4", "avi", "rmvb", "mkv", "mov", "amr", "mpg"]
+    },
+    "database": {
+        "table_name": "PHOTO"
+    },
+    "exif": {
+        "photo_no_date_keys": ["EXIF ExifVersion"],
+        "photo_date_keys": ["Image DateTime", "EXIF DateTimeOriginal"]
+    },
+    "skip_folders": ["System Volume Information", "$RECYCLE.BIN", ".stfolder"],
+    "timezone": "Asia/Shanghai",
+    "logging": {
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file": "photo_classifier.log"
+    },
+    "performance": {
+        "min_file_size": 1024,
+        "batch_size": 100,
+        "max_workers": 4,
+        "enable_multithreading": true
+    }
+} 
