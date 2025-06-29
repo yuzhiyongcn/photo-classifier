@@ -1,7 +1,6 @@
 """
-Photo Classifier - Optimized Version
-Automatically classifies and organizes photos and videos based on creation date
-with enhanced error handling, logging, and configuration management.
+Photo Classifier - Optimized Version with Fast Pre-check
+自动根据创建日期分类和整理照片视频，支持快速预检查避免重复计算hash
 """
 
 import os
@@ -59,7 +58,7 @@ class ConfigManager:
 
 
 class PhotoClassifierOptimized:
-    """Optimized photo classifier with enhanced error handling and logging"""
+    """Optimized photo classifier with fast pre-check and enhanced error handling"""
     
     def __init__(self, config_path: str = "config.json"):
         # Load configuration
@@ -97,6 +96,7 @@ class PhotoClassifierOptimized:
         self.processed_count = 0
         self.error_count = 0
         self.duplicate_count = 0
+        self.skipped_count = 0  # 快速跳过的文件数
         
         # Database connection
         self.db = None
@@ -105,7 +105,7 @@ class PhotoClassifierOptimized:
         # Validate configuration
         self._validate_paths()
         
-        self.logger.info("照片分类器初始化成功")
+        self.logger.info("照片分类器初始化成功 - 支持快速预检查")
     
     def _setup_logging(self) -> None:
         """Setup logging configuration"""
@@ -180,7 +180,7 @@ class PhotoClassifierOptimized:
                 self.logger.error(f"关闭数据库错误: {e}")
     
     def create_table(self) -> None:
-        """Create database table with enhanced error handling"""
+        """Create optimized database table structure"""
         try:
             self.connect_database()
             cursor = self.db.cursor()
@@ -189,23 +189,22 @@ class PhotoClassifierOptimized:
             cursor.execute(f"DROP TABLE IF EXISTS {self.table_name}")
             self.logger.info(f"删除现有表: {self.table_name}")
             
-            # Create new table with additional metadata
+            # Create new optimized table structure (removed ORIGINAL_PATH and NEW_PATH)
             sql = f"""CREATE TABLE {self.table_name} (
                 ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 MD5 TEXT NOT NULL UNIQUE,
-                ORIGINAL_PATH TEXT,
-                NEW_PATH TEXT,
-                FILE_SIZE INTEGER,
+                FILE_SIZE INTEGER NOT NULL,
                 CREATED_DATE TEXT,
                 PROCESSED_DATE TEXT DEFAULT CURRENT_TIMESTAMP
             )"""
             cursor.execute(sql)
             
-            # Create index for better performance
+            # Create indexes for better performance
             cursor.execute(f"CREATE INDEX idx_md5 ON {self.table_name}(MD5)")
+            cursor.execute(f"CREATE INDEX idx_size_date ON {self.table_name}(FILE_SIZE, CREATED_DATE)")
             
             self.db.commit()
-            self.logger.info(f"创建表: {self.table_name}")
+            self.logger.info(f"创建优化后的表: {self.table_name} (支持快速预检查)")
             
         except sqlite3.Error as e:
             self.logger.error(f"创建表失败: {e}")
@@ -255,6 +254,13 @@ class PhotoClassifierOptimized:
                 print("🏗️  表结构:")
                 for col in columns:
                     print(f"   {col[1]} ({col[2]})")
+                    
+                # Show indexes
+                cursor.execute(f"PRAGMA index_list({self.table_name})")
+                indexes = cursor.fetchall()
+                print("🔍 索引:")
+                for idx in indexes:
+                    print(f"   {idx[1]}")
             else:
                 print("❌ 表不存在")
             print("=" * 50)
@@ -276,25 +282,30 @@ class PhotoClassifierOptimized:
                 print("❌ 数据库表不存在，请先运行 --create-table")
                 return
             
-            # Get recent records
-            cursor.execute(f"SELECT MD5, ORIGINAL_PATH, CREATED_DATE, PROCESSED_DATE FROM {self.table_name} ORDER BY ID DESC LIMIT ?", (limit,))
+            # Get recent records (updated for new schema)
+            cursor.execute(f"SELECT MD5, FILE_SIZE, CREATED_DATE, PROCESSED_DATE FROM {self.table_name} ORDER BY ID DESC LIMIT ?", (limit,))
             records = cursor.fetchall()
             
-            print("=" * 80)
+            print("=" * 70)
             print(f"最近 {len(records)} 条记录")
-            print("=" * 80)
+            print("=" * 70)
             
             if records:
-                print(f"{'MD5':<32} {'创建日期':<12} {'处理时间':<20} {'原始路径'}")
-                print("-" * 80)
+                print(f"{'MD5':<20} {'文件大小':<10} {'创建日期':<12} {'处理时间'}")
+                print("-" * 70)
                 for record in records:
-                    md5, original_path, created_date, processed_date = record
-                    # Truncate long paths
-                    display_path = (original_path[:30] + "...") if len(original_path) > 33 else original_path
-                    print(f"{md5[:8]:<8}...{md5[-8:]} {created_date:<12} {processed_date[:19]:<20} {display_path}")
+                    md5, file_size, created_date, processed_date = record
+                    # Format file size
+                    if file_size > 1024 * 1024:
+                        size_str = f"{file_size//1024//1024}MB"
+                    elif file_size > 1024:
+                        size_str = f"{file_size//1024}KB"
+                    else:
+                        size_str = f"{file_size}B"
+                    print(f"{md5[:8]}...{md5[-8:]} {size_str:<10} {created_date:<12} {processed_date[:19]}")
             else:
                 print("📭 数据库为空")
-            print("=" * 80)
+            print("=" * 70)
             
         except sqlite3.Error as e:
             print(f"❌ 数据库错误: {e}")
@@ -330,6 +341,34 @@ class PhotoClassifierOptimized:
         except (IOError, OSError) as e:
             self.logger.warning(f"无法从 {file_path} 读取EXIF: {e}")
             return False
+
+    def should_process_file(self, file_path: str) -> bool:
+        """🚀 Fast pre-check to determine if file needs processing"""
+        try:
+            # Get file size
+            file_size = os.path.getsize(file_path)
+            
+            # Extract creation date (this is the main cost, but still faster than MD5)
+            year, month, day = self.read_date(file_path)
+            created_date = f"{year}-{month}-{day}"
+            
+            # Check if file already exists with same size and creation date
+            cursor = self.db.cursor()
+            cursor.execute(
+                f"SELECT MD5 FROM {self.table_name} WHERE FILE_SIZE=? AND CREATED_DATE=?",
+                (file_size, created_date)
+            )
+            
+            if cursor.fetchone():
+                self.logger.debug(f"文件已存在（大小+日期匹配），跳过: {file_path}")
+                self.skipped_count += 1
+                return False
+            
+            return True
+            
+        except (OSError, sqlite3.Error) as e:
+            self.logger.warning(f"预检查 {file_path} 失败: {e}")
+            return True  # 出错时仍然处理，让后续流程处理
     
     def get_md5(self, file_path: str) -> str:
         """Calculate MD5 hash of file with error handling"""
@@ -347,12 +386,11 @@ class PhotoClassifierOptimized:
         """Validate file and check for duplicates"""
         try:
             cursor = self.db.cursor()
-            cursor.execute(f"SELECT MD5, ORIGINAL_PATH FROM {self.table_name} WHERE MD5=?", (md5,))
+            cursor.execute(f"SELECT MD5 FROM {self.table_name} WHERE MD5=?", (md5,))
             record = cursor.fetchone()
             
             if record:
-                original_path = record[1] if record[1] else "Unknown"
-                self.logger.warning(f"发现重复文件: {file_path} (原始: {original_path})")
+                self.logger.warning(f"发现重复文件（MD5相同）: {file_path}")
                 os.remove(file_path)
                 self.duplicate_count += 1
                 raise ValueError(f"Duplicate file removed: {file_path}")
@@ -456,13 +494,13 @@ class PhotoClassifierOptimized:
             self.logger.error(f"移动文件 {file_path} 到 {target_path} 失败: {e}")
             raise
     
-    def add_record(self, md5: str, original_path: str, new_path: str, file_size: int, created_date: str) -> None:
-        """Add file record to database with enhanced metadata"""
+    def add_record(self, md5: str, file_size: int, created_date: str) -> None:
+        """Add file record to database with optimized metadata (removed path fields)"""
         try:
             cursor = self.db.cursor()
             cursor.execute(
-                f"INSERT INTO {self.table_name}(MD5, ORIGINAL_PATH, NEW_PATH, FILE_SIZE, CREATED_DATE) VALUES(?,?,?,?,?)",
-                (md5, original_path, new_path, file_size, created_date)
+                f"INSERT INTO {self.table_name}(MD5, FILE_SIZE, CREATED_DATE) VALUES(?,?,?)",
+                (md5, file_size, created_date)
             )
             self.db.commit()
         except sqlite3.Error as e:
@@ -471,7 +509,7 @@ class PhotoClassifierOptimized:
             raise
     
     def process_file(self, root: str, filename: str) -> None:
-        """Process a single file with comprehensive error handling"""
+        """Process a single file with fast pre-check and comprehensive error handling"""
         file_path = os.path.join(root, filename)
         
         try:
@@ -485,7 +523,12 @@ class PhotoClassifierOptimized:
                 self.logger.debug(f"不支持的文件类型，跳过: {file_path}")
                 return
             
-            # Calculate MD5
+            # 🚀 Fast pre-check: Skip if file already processed and unchanged
+            if not self.should_process_file(file_path):
+                return
+            
+            # Calculate MD5 only if needed
+            self.logger.debug(f"开始计算MD5: {file_path}")
             md5 = self.get_md5(file_path)
             file_size = os.path.getsize(file_path)
             
@@ -498,14 +541,9 @@ class PhotoClassifierOptimized:
             
             # Move and rename file
             new_name = self.rename_move(file_path, year, month, day, md5)
-            new_path = os.path.join(
-                self.photo_output if self.is_photo(file_path) else 
-                (self.video_output if self.is_video(file_path) else self.image_output),
-                year, month, day, new_name
-            )
             
-            # Add record to database
-            self.add_record(md5, file_path, new_path, file_size, created_date)
+            # Add record to database (without path information)
+            self.add_record(md5, file_size, created_date)
             
             self.processed_count += 1
             self.logger.info(f"已处理 ({self.processed_count}): {filename} -> {new_name}")
@@ -545,19 +583,24 @@ class PhotoClassifierOptimized:
         self.logger.info(f"删除了 {deleted_count} 个空目录")
     
     def generate_report(self) -> None:
-        """Generate processing report"""
-        self.logger.info("=" * 50)
-        self.logger.info("处理报告")
-        self.logger.info("=" * 50)
-        self.logger.info(f"已处理文件: {self.processed_count}")
-        self.logger.info(f"发现重复: {self.duplicate_count}")
-        self.logger.info(f"遇到错误: {self.error_count}")
-        self.logger.info("=" * 50)
+        """Generate processing report with optimization statistics"""
+        self.logger.info("=" * 60)
+        self.logger.info("📊 处理报告")
+        self.logger.info("=" * 60)
+        self.logger.info(f"✅ 已处理文件: {self.processed_count}")
+        self.logger.info(f"⚡ 快速跳过: {self.skipped_count}")
+        self.logger.info(f"🔄 发现重复: {self.duplicate_count}")
+        self.logger.info(f"❌ 遇到错误: {self.error_count}")
+        total_checked = self.processed_count + self.skipped_count + self.duplicate_count + self.error_count
+        if total_checked > 0:
+            skip_ratio = (self.skipped_count / total_checked) * 100
+            self.logger.info(f"🚀 预检查优化率: {skip_ratio:.1f}%")
+        self.logger.info("=" * 60)
     
     def start(self) -> None:
         """Start the classification process"""
         start_time = time.time()
-        self.logger.info("开始照片分类处理")
+        self.logger.info("开始照片分类处理 - 支持快速预检查")
         
         try:
             self.connect_database()
@@ -576,10 +619,9 @@ class PhotoClassifierOptimized:
         self.generate_report()
 
 
-
 def main():
     """Main function with command line argument support"""
-    parser = argparse.ArgumentParser(description="Photo Classifier - Optimized Version")
+    parser = argparse.ArgumentParser(description="Photo Classifier - Fast Pre-check Optimized Version")
     parser.add_argument("--config", default="config.json", help="Configuration file path")
     parser.add_argument("--create-table", action="store_true", help="Create/recreate database table")
     parser.add_argument("--drop-table", action="store_true", help="Drop existing database table")
@@ -607,7 +649,7 @@ def main():
         if args.create_table:
             print("正在创建/重建数据库表...")
             classifier.create_table()
-            print("✅ 数据库表创建完成")
+            print("✅ 数据库表创建完成（支持快速预检查）")
             print(f"📍 数据库位置: {classifier.db_path}")
             print(f"📋 表名: {classifier.table_name}")
             return
