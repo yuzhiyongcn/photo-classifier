@@ -1,24 +1,49 @@
 {
     "paths": {
-        "input_folder": "D:\\temp\\test\\input",
-        "photo_output": "D:\\temp\\test\\output\\photo",
-        "video_output": "D:\\temp\\test\\output\\video",
-        "image_output": "D:\\temp\\test\\output\\image",
+        "input_folder": "D:\\待分类照片视频",
+        "photo_output": "D:\\总仓库-照片视频\\总照片备份",
+        "video_output": "D:\\总仓库-照片视频\\总视频备份",
+        "image_output": "D:\\总仓库-照片视频\\总图片备份",
         "database_dir": "database",
         "database_file": "photo_classifier.db"
     },
     "supported_formats": {
-        "image_extensions": ["jpg", "jpeg", "bmp", "png", "tif", "gif", "heic"],
-        "video_extensions": ["mp4", "avi", "rmvb", "mkv", "mov", "amr", "mpg"]
+        "image_extensions": [
+            "jpg",
+            "jpeg",
+            "bmp",
+            "png",
+            "tif",
+            "gif",
+            "heic"
+        ],
+        "video_extensions": [
+            "mp4",
+            "avi",
+            "rmvb",
+            "mkv",
+            "mov",
+            "amr",
+            "mpg"
+        ]
     },
     "database": {
         "table_name": "PHOTO"
     },
     "exif": {
-        "photo_no_date_keys": ["EXIF ExifVersion"],
-        "photo_date_keys": ["Image DateTime", "EXIF DateTimeOriginal"]
+        "photo_no_date_keys": [
+            "EXIF ExifVersion"
+        ],
+        "photo_date_keys": [
+            "Image DateTime",
+            "EXIF DateTimeOriginal"
+        ]
     },
-    "skip_folders": ["System Volume Information", "$RECYCLE.BIN", ".stfolder"],
+    "skip_folders": [
+        "System Volume Information",
+        "$RECYCLE.BIN",
+        ".stfolder"
+    ],
     "timezone": "Asia/Shanghai",
     "logging": {
         "level": "INFO",
@@ -31,4 +56,4 @@
         "max_workers": 4,
         "enable_multithreading": true
     }
-} 
+}
