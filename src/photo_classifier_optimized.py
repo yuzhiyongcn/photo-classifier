@@ -1180,7 +1180,7 @@ if __name__ == "__main__":
     # sys.argv = ["script_name", "--batch-size", "100"]         # 设置批处理大小
 
     # === 自定义配置 ===
-    # sys.argv = ["script_name", "--input", "D:\\test\\input"]  # 自定义输入目录
+    # sys.argv = ["script_name", "--input", "D:\\beam-pro"]  # 自定义输入目录
     # sys.argv = ["script_name", "--config", "my_config.json"]  # 自定义配置文件
 
     # === 组合使用示例 ===
